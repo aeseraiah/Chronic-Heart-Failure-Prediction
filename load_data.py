@@ -3,6 +3,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import matplotlib.pyplot as plt
+import tensorflow as tf
 
 def preprocess_music_data(file_path, test_size=0.2, random_state=42):
     # Load the dataset
