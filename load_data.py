@@ -32,6 +32,19 @@ def drop_data(data_df):
     # Remove columns with nonsensical or inflated values: 
     removed_inflated_df = dropped_patient_id.drop('cigarettes /year', axis=1) # values are too high to be realistic
 
+    # Remove range of ages above 89
+    val_arr_age = []
+    for index, val in enumerate(removed_inflated_df['Age']):
+        try:
+            age = val
+            if age == '>89':
+                removed_inflated_df.drop(index, inplace=True)
+            else:
+                age = int(val)
+        except ValueError:
+            print(f"ValueError: {index, val}")
+            pass
+
     return removed_inflated_df
 
 
@@ -44,21 +57,23 @@ def standard_scalar(data_df):
 
 def simple_neural_net(xtrain):
     input_d = xtrain.shape[1]
-    num_classes = 5
+    print(f'Input dimension: {input_d}')
+    num_classes = 4
 
     model = Sequential([
-        Dense(100, activation='relu', input_dim=input_d), 
-        Dense(50, activation='relu'),
+        # Dense(512, activation='relu', input_dim=input_d), 
+        Dense(256, activation='relu', input_dim=input_d), 
+        Dense(128, activation='relu'),
+        Dense(64, activation='relu'),
         Dense(num_classes, activation='softmax')
     ])
     return model
 
 
-def k_fold_cross_validation(features, labels):
+def k_fold_cross_validation(features, labels, num_epochs=100):
 
-    print(labels.shape)
-    # WHY ARE THERE 5 LABELS RATHER THAN 3?
-    print(np.unique(labels))
+    labels_df = pd.DataFrame(labels)
+    labels_df.to_csv('labels_inside_kfold.csv')
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
@@ -71,11 +86,14 @@ def k_fold_cross_validation(features, labels):
         model = simple_neural_net(X_train)
         model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
         
-        history = model.fit(X_train, y_train)
+        history = model.fit(X_train, y_train, epochs=num_epochs)
 
         y_pred = model.predict(X_test)
 
-        accuracy = accuracy_score(y_test, y_pred)
+        # Output of model is array if probabilities for each class, so must find highest probability using np.round
+        y_pred_rounded = np.round(y_pred)
+
+        accuracy = accuracy_score(y_test, y_pred_rounded)
         accuracy_scores.append(accuracy)
 
     average_accuracy = np.mean(accuracy_scores)
@@ -94,7 +112,7 @@ def plot_metrics(model_history):
 def auto_sklearn(features, labels):
     X_train, X_test, y_train, y_test = train_test_split(features, labels, random_state=1)
     automl = autosklearn.classification.AutoSklearnClassifier()
-    automl.fit(X_train, y_train)
+    automl.fit(X_train, y_train, e)
     y_hat = automl.predict(X_test)
     print("Accuracy score", accuracy_score(y_test, y_hat))
 
@@ -148,29 +166,6 @@ def preprocess_data(file_path, test_size=0.2, random_state=42):
     # Remove irrelevant or erroneous data:
     data_df_dropped = drop_data(data_df)
 
-    # Replace range of ages above 89 with 90:
-    # val_arr_bmi = []
-    val_arr_age = []
-    for index, val in enumerate(zip(data_df_dropped['Age'], data_df_dropped['Body Mass Index (Kg/m2)'])):
-        try:
-            age = val[0]
-            if age == '>89':
-                age = int(90)
-                print(f"Subject number: {index}, {val}")
-                # age = int(age.strip(">"))
-            else:
-                age = int(val[0])
-
-            bmi = float(val[1])
-            val_arr_age.append(age)
-            # val_arr_bmi.append(bmi)
-        except ValueError:
-            print(f"TYPE ERROR: {index, val}")
-            pass
-
-    # data_df_dropped['Body Mass Index (Kg/m2)'] = val_arr_bmi
-    data_df_dropped['Age'] = val_arr_age
-
     data_df_dropped.to_csv('before_imputation.csv')
 
     # Specify the columns you want to one-hot encode
@@ -194,7 +189,7 @@ def preprocess_data(file_path, test_size=0.2, random_state=42):
     # One-hot encode the specified columns
     X_dropped_dummies = pd.get_dummies(data_df_dropped, columns=columns_to_encode, drop_first=True)
 
-    for col in X_dropped_dummies.select_dtypes(include=['bool', 'uint8']).columns:
+    for col in X_dropped_dummies.select_dtypes(include=['bool']).columns:
         X_dropped_dummies[col] = X_dropped_dummies[col].astype(int)
 
     X_dropped_dummies.to_csv('after_dummy_creation.csv', index=False)
@@ -225,18 +220,24 @@ def preprocess_data(file_path, test_size=0.2, random_state=42):
     # non_zero_counts_per_row = (labels != 0).sum(axis=0)
     # non_cardiac_death = (labels == 1).sum(axis=0)
 
-    # from [0. 1. 3. 6. 7.] to [0 1 2 3 4]
+    # [0, 1, 2, 3] == [survivor, non-cardiac death, SCD, Pump-Failure]
+
+    for index, label in enumerate(labels):
+        if label == 7.0:
+            labels[index] = 6.0
+
+    labels.to_csv('labels.csv', index=False)
 
     encoder = LabelEncoder()
     encoder.fit(labels)
     encoded_labels = encoder.transform(labels)
-    print(np.unique(encoded_labels))
 
-    one_hot_labels = to_categorical(labels, num_classes=len(np.unique(labels)))
-    print(one_hot_labels)
+    one_hot_labels = to_categorical(encoded_labels, num_classes=len(np.unique(encoded_labels)))
 
-    clf = RandomForestClassifier(random_state=42)
-    average_testing_accuracy, history = k_fold_cross_validation(features, one_hot_labels)
+    # clf = RandomForestClassifier(random_state=42)
+    # nn_model = simple_neural_net(features,labels)
+
+    average_testing_accuracy, history = k_fold_cross_validation(features, one_hot_labels, num_epochs=100)
     print(f"Average Test Accuracy: {average_testing_accuracy}")
 
     # feature_names = features.columns.tolist()
