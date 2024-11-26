@@ -2,16 +2,20 @@ import pandas as pd
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dropout, Dense, Conv1D, Flatten
+from tensorflow.keras.layers import Dropout, Dense, Conv1D, Flatten, BatchNormalization, MaxPooling1D
 import numpy as np
+from sklearn.utils import class_weight
 from tensorflow.keras.utils import to_categorical
 import matplotlib.pyplot as plt
 import pandas as pd
+import re
 import glob
+import tensorflow as tf
+from sklearn.metrics import roc_auc_score
 import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from lime import lime_tabular
+# from lime import lime_tabular
 from sklearn.metrics import accuracy_score
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import LabelEncoder
@@ -101,6 +105,35 @@ def simple_neural_net(xtrain):
     ])
     return model
 
+def cnn(X_train):
+    print(f'X_train shape: {X_train.shape}')
+    num_classes = 4
+    model = Sequential()
+    # model.add(Conv1D(64,  kernel_size=3, activation='relu', kernel_initializer='he_uniform',padding = 'same', input_shape=(X_train.shape[1], X_train.shape[2])))
+    model.add(Conv1D(128, 3, activation='relu', input_shape=(X_train.shape[1], X_train.shape[2])))
+    # model.add(MaxPooling1D(pool_size=2))
+    model.add(Dropout(0.20))
+    model.add(Conv1D(64, 3, activation='relu'))
+    model.add(Flatten())
+    model.add(Dense(32, activation='relu'))
+    model.add(Dense(num_classes,activation = 'softmax'))
+
+    # model.add(Conv1D(64,  kernel_size=3, activation='relu', kernel_initializer='he_uniform',padding = 'same', input_shape=(X_train.shape[1], X_train.shape[2]))) 
+    # model.add(BatchNormalization(axis = -1))
+    # model.add(MaxPooling1D(pool_size=2))
+    # model.add(Dropout(0.20))
+    # model.add(Conv1D(64,  kernel_size=3, activation='relu', kernel_initializer='he_uniform',padding = 'same'))
+    # model.add(BatchNormalization(axis=-1))
+    # model.add(MaxPooling1D(pool_size=2))
+    # model.add(Dropout(0.20))
+    # model.add(Flatten())
+    # model.add(Dropout(0.20))
+    # model.add(Dense(32, activation = 'relu'))
+    # model.add(Dense(16, activation = 'relu'))
+    # model.add(Dense(num_classes,activation = 'softmax'))
+
+    return model
+
 
 def k_fold_cross_validation(features, labels, num_epochs):
 
@@ -108,7 +141,9 @@ def k_fold_cross_validation(features, labels, num_epochs):
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
-    accuracy_scores = []
+    cnn_AUC_scores = []
+    simple_nn_AUC_scores = []
+    ensemble_AUC_scores = []
 
     for train_index, test_index in kf.split(features):
         X_train, X_test = features_df.iloc[train_index], features_df.iloc[test_index]
@@ -116,8 +151,15 @@ def k_fold_cross_validation(features, labels, num_epochs):
 
         print(f"Testing Subjects: {test_index}")
 
-        model = simple_neural_net(X_train)
-        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        X_train_arr = np.array(X_train)
+        # reshape array for expected cnn input
+        X_train_cnn = X_train_arr.reshape((X_train_arr.shape[0], X_train_arr.shape[1], 1))  # Reshaping to (samples, timesteps, channels)
+        
+        cnn_model = cnn(X_train_cnn)
+        simple_nn_model = simple_neural_net(X_train_arr)
+
+        cnn_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=tf.keras.metrics.AUC())
+        simple_nn_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=tf.keras.metrics.AUC())
 
         early_stopping = EarlyStopping(
             monitor='val_loss',       # Can also monitor 'val_accuracy', 'loss', etc.
@@ -125,36 +167,66 @@ def k_fold_cross_validation(features, labels, num_epochs):
             restore_best_weights=True, # Restore the weights of the best model (i.e., the one with the lowest val_loss)
             verbose=1                  # Prints information about stopping
         )
-        
-        history = model.fit(X_train, y_train, epochs=num_epochs, validation_split=0.2, callbacks=[early_stopping])
-        y_pred = model.predict(X_test)
 
+        print('TRAINING CNN MODEL:')
+        cnn_history = cnn_model.fit(X_train_cnn, y_train, epochs=num_epochs, validation_split=0.2, callbacks=[early_stopping])
+        print('TRAINING SIMPLE NN MODEL:')
+        nn_history = simple_nn_model.fit(X_train_arr, y_train, epochs=num_epochs, validation_split=0.2, callbacks=[early_stopping])
 
-        new_y_pred = []
-        for subject in y_pred:
+        cnn_y_pred = cnn_model.predict(X_test)
+        nn_y_pred = simple_nn_model.predict(X_test)
+
+        print(f'Probabilities for first CNN prediction: {cnn_y_pred[0]}') # Corresponds to probabilities for first prediction
+        print(f'Probabilities for first NN prediction: {nn_y_pred[0]}') # Corresponds to probabilities for first prediction
+
+        ensemble_y_pred = (cnn_y_pred + nn_y_pred) / 2
+        print(f'Shape of ensemble preds: {ensemble_y_pred.shape}')
+        print(f'Probabilities for first NN prediction: {ensemble_y_pred[0]}')
+
+        cnn_new_y_pred = []
+        simple_nn_new_y_pred = []
+        ensemble_new_y_pred = []
+        for cnn_subject_prob, simple_nn_subject_prob, ensemble_subject_prob in zip(cnn_y_pred, nn_y_pred, ensemble_y_pred):
             # Convert each probability to 1 if it's >= 0.5, otherwise 0
-            binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in subject]
-            new_y_pred.append(binary_subject_pred)
+            cnn_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in cnn_subject_prob]
+            cnn_new_y_pred.append(cnn_binary_subject_pred)
 
+            simple_nn_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in simple_nn_subject_prob]
+            simple_nn_new_y_pred.append(simple_nn_binary_subject_pred)
 
-        accuracy = accuracy_score(y_test, new_y_pred)
-        print(f"Test Accuracy: {accuracy}")
+            ensemble_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in ensemble_subject_prob]
+            ensemble_new_y_pred.append(ensemble_binary_subject_pred)
+
+        print(y_test)
+        print(cnn_y_pred)
+        cnn_AUC = roc_auc_score(y_test, cnn_y_pred, average='macro', multi_class='ovr')
+        print(f"CNN Test AUC: {cnn_AUC}")
+
+        simple_nn_AUC = roc_auc_score(y_test, nn_y_pred, average='macro', multi_class='ovr')
+        print(f"Simple NN Test AUC: {simple_nn_AUC}")
+
+        ensemble_AUC = roc_auc_score(y_test, ensemble_y_pred, average='macro', multi_class='ovr')
+        print(f"Ensemble Test AUC: {ensemble_AUC}")
 
         test_index_arr = None
     
-        accuracy_scores.append(accuracy)
+        cnn_AUC_scores.append(cnn_AUC)
+        simple_nn_AUC_scores.append(simple_nn_AUC)
+        ensemble_AUC_scores.append(ensemble_AUC)
 
-    average_accuracy = np.mean(accuracy_scores)
+    cnn_AUC = np.mean(cnn_AUC_scores)
+    simple_nn_AUC = np.mean(simple_nn_AUC_scores)
+    ensemble_AUC = np.mean(ensemble_AUC_scores)
 
-    return average_accuracy, history, test_index_arr
+    return cnn_AUC, simple_nn_AUC, ensemble_AUC, cnn_history, nn_history, test_index_arr
 
 
-def plot_metrics(model_history, metrics_plot_name):
-    plt.plot(model_history.history['accuracy'], label='Training Loss')
-    plt.plot(model_history.history['val_accuracy'], label='Validation Loss')
-    plt.title('Accuracy')
+def plot_metrics(model_history, metrics_plot_name, model_name):
+    plt.plot(model_history.history['AUC'], label='Training AUC')
+    plt.plot(model_history.history['val_AUC'], label='Validation AUC')
+    plt.title(f'{model_name} AUC')
     plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
+    plt.ylabel('AUC')
     plt.legend()
     plt.savefig(f'{metrics_plot_name}.png')
     plt.show()
@@ -190,61 +262,6 @@ def feature_importance(X_train, X_test, feature_names, label_name, model):
     # Print the explanation as a list of feature contributions
     for feature, importance in exp.as_list():
         print(f"{feature}: {importance}")
-
-def cnn(X_train):
-    num_classes = 4
-    model = Sequential()
-    model.add(Conv1D(256, kernel_size = 3, strides = 1, input_shape=(X_train.shape[1], 1)))
-    model.add(Flatten())
-    model.add(Dense(num_classes, activation='softmax'))
-
-    return model
-
-
-def plot_ecg(ecg_data):
-    plt.plot(ecg_data)
-    plt.show()
-
-
-def preprocess_ecg_data(file_path):
-    dat_files = glob.glob(os.path.join(file_path, '**', '*.dat'), recursive=True)
-
-    ecg_all_subs = []
-    for file in dat_files:
-        ecg_arr = np.fromfile(file, dtype=np.float32)
-        ecg_all_subs.append(ecg_arr)
-
-    ecg_all_subs_arr = np.array(ecg_all_subs)
-    print(ecg_all_subs_arr.shape)
-
-    labels = load_labels(file_path)
-    first_two_subs = labels[:1]
-    print(first_two_subs.shape)
-
-    # X_train, X_test, y_train, y_test = train_test_split(ecg_all_subs_arr, first_two_subs)
-
-    # print(f'Shape of training data: {X_train.sah}')
-
-    model = cnn(ecg_all_subs_arr)
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-    early_stopping = EarlyStopping(
-        monitor='val_loss',       # Can also monitor 'val_accuracy', 'loss', etc.
-        patience=5,               # Number of epochs to wait for improvement
-        restore_best_weights=True, # Restore the weights of the best model (i.e., the one with the lowest val_loss)
-        verbose=1                  # Prints information about stopping
-    )
-    
-    history = model.fit(ecg_all_subs_arr, first_two_subs, epochs=2, validation_split=0.2, callbacks=[early_stopping])
-
-    # y_pred = model.predict(X_test)
-    # test_acc = accuracy_score(y_test, y_pred)
-    # average_testing_accuracy, model_history, test_index_arr = k_fold_cross_validation(, one_hot_labels, num_epochs=30)
-    # print(f"Test Accuracy: {test_acc}")
-
-    # plot_name=f'cnn_metrics'
-    # plot_metrics(model_history=model_history, metrics_plot_name=plot_name)
-    # plot_ecg(ecg_arr[200:300])
 
 
 def load_labels(file_path):
@@ -342,27 +359,32 @@ def preprocess_tabular_data(file_path, test_size=0.2, random_state=42):
     # auto_sklearn_accuracy, auto_sklearn_history = auto_sklearn(features, one_hot_labels, num_epochs=2)
     # print(f'Autosklearn Accuracy: {auto_sklearn_accuracy}')
 
-    n_comps = 75
-    explained_variance_ratio, eigenvals, pcs, pca_features = pca(features, num_components=n_comps, plot_bool=False)
+    n_comps = None
+    # explained_variance_ratio, eigenvals, pcs, pca_features = pca(features, num_components=n_comps, plot_bool=False)
  
-    print(f"PCA Features shape: {pca_features.shape}")
-    print("Explained Variance Ratio:", explained_variance_ratio)  # Variance explained by each component
+    # print(f"PCA Features shape: {pca_features.shape}")
+    # print("Explained Variance Ratio:", explained_variance_ratio)  # Variance explained by each component
+    # print(f'Explained Variance Ratio Sum: {sum(explained_variance_ratio)}')
 
-    plot_name=f'nn_metrics_{n_comps}'
-    average_testing_accuracy, model_history, test_index_arr = k_fold_cross_validation(pca_features, one_hot_labels, num_epochs=30)
-    print(f"Average Test Accuracy: {average_testing_accuracy}")
+    nn_plot_name=f'simple_nn_metrics_{n_comps}'
+    cnn_plot_name=f'cnn_metrics_{n_comps}'
+
+    num_epochs = 10
+    cnn_average_test_AUC, simple_nn_average_test_AUC, ensemble_average_test_AUC, cnn_history, simple_nn_history, test_index_arr = k_fold_cross_validation(features, one_hot_labels, num_epochs=num_epochs)
+
+    print(f"Average CNN Test AUC: {cnn_average_test_AUC}")
+    print(f"Average Simple NN Test AUC: {simple_nn_average_test_AUC}")
+    print(f"Average Ensemble Test AUC: {ensemble_average_test_AUC}")
 
     # ADD VARIANCE FOR TOTAL
-    print(f'Explained Variance Ratio Sum: {sum(explained_variance_ratio)}')
+    # print(f'Explained Variance Ratio Sum: {sum(explained_variance_ratio)}')
 
-    # feature_names = features.columns.tolist()
-    # label_name = labels.tolist()
-
-    plot_metrics(model_history=model_history, metrics_plot_name=plot_name)
+    plot_metrics(model_history=cnn_history, metrics_plot_name=cnn_plot_name, model_name='CNN')
+    plot_metrics(model_history=simple_nn_history, metrics_plot_name=nn_plot_name, model_name='Simple NN')
 
 
 data_file_path = './data/'
 # preprocess_tabular_data(data_file_path)
-preprocess_ecg_data(data_file_path)
+preprocess_tabular_data(data_file_path)
 
 
