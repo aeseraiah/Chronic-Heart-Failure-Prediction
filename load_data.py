@@ -13,7 +13,6 @@ import glob
 import tensorflow as tf
 from sklearn.metrics import roc_auc_score
 import os
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 # from lime import lime_tabular
 from sklearn.metrics import accuracy_score
@@ -106,7 +105,6 @@ def simple_neural_net(xtrain):
     return model
 
 def cnn(X_train):
-    print(f'X_train shape: {X_train.shape}')
     num_classes = 4
     model = Sequential()
     # model.add(Conv1D(64,  kernel_size=3, activation='relu', kernel_initializer='he_uniform',padding = 'same', input_shape=(X_train.shape[1], X_train.shape[2])))
@@ -139,21 +137,24 @@ def k_fold_cross_validation(features, labels, num_epochs):
 
     features_df = pd.DataFrame(features)
 
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    kf = KFold(n_splits=5, shuffle=True)
+    # kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
     cnn_AUC_scores = []
     simple_nn_AUC_scores = []
     ensemble_AUC_scores = []
-
-    for train_index, test_index in kf.split(features):
+    
+    for fold_num, (train_index, test_index) in enumerate(kf.split(features), 1):
         X_train, X_test = features_df.iloc[train_index], features_df.iloc[test_index]
         y_train, y_test = labels[train_index], labels[test_index]
 
-        print(f"Testing Subjects: {test_index}")
+        # print(f"Testing Subjects: {test_index}")
 
         X_train_arr = np.array(X_train)
+        X_test_arr = np.array(X_test)
         # reshape array for expected cnn input
-        X_train_cnn = X_train_arr.reshape((X_train_arr.shape[0], X_train_arr.shape[1], 1))  # Reshaping to (samples, timesteps, channels)
+        X_train_cnn = X_train_arr.reshape((X_train_arr.shape[0], X_train_arr.shape[1], 1))  # Reshaping to (samples, timesteps, channels) OR (subjects, features, channels)
+        X_test_cnn = X_test_arr.reshape((X_test_arr.shape[0], X_test_arr.shape[1], 1))  # Reshaping to (samples, timesteps, channels)
         
         cnn_model = cnn(X_train_cnn)
         simple_nn_model = simple_neural_net(X_train_arr)
@@ -169,26 +170,48 @@ def k_fold_cross_validation(features, labels, num_epochs):
         )
 
         print('TRAINING CNN MODEL:')
+        print(f'X_train_cnn: {X_train_cnn.shape}')
+        print(f'X_test_cnn: {X_test_cnn.shape}')
+        print(f'y_train: {y_train.shape}')
         cnn_history = cnn_model.fit(X_train_cnn, y_train, epochs=num_epochs, validation_split=0.2, callbacks=[early_stopping])
         print('TRAINING SIMPLE NN MODEL:')
         nn_history = simple_nn_model.fit(X_train_arr, y_train, epochs=num_epochs, validation_split=0.2, callbacks=[early_stopping])
 
-        cnn_y_pred = cnn_model.predict(X_test)
+        cnn_y_pred = cnn_model.predict(X_test_cnn)
         nn_y_pred = simple_nn_model.predict(X_test)
+        cnn_y_pred_train = cnn_model.predict(X_train_cnn)
+        
+        # print(f'Training labels for subjects 1-10: {y_train[:10]}\n')
+        # print(f'Testing labels for subjects 1-10: {y_test[:10]}\n')
+        # print(f'Probabilities for first CNN test prediction (subjects 1-10): {cnn_y_pred[:10]}\n') # Corresponds to probabilities for first prediction
+        print(f'Probabilities for first CNN train prediction (subjects 1-10): {cnn_y_pred_train[:10]}\n') # Corresponds to probabilities for first prediction
+        print(f'Labels for training data (subjects 1-10): {y_train}')
 
-        print(f'Probabilities for first CNN prediction: {cnn_y_pred[0]}') # Corresponds to probabilities for first prediction
-        print(f'Probabilities for first NN prediction: {nn_y_pred[0]}') # Corresponds to probabilities for first prediction
+        y_train_ground_truth_df = pd.DataFrame(y_train)
+        y_train_ground_truth_df.to_csv(f'y_train_ground_truth_df_{fold_num}.csv')
+
+        y_train_pred_df = pd.DataFrame(cnn_y_pred_train)
+        y_train_pred_df.to_csv(f'y_train_pred_df_{fold_num}.csv')
+
+        y_train_ground_truth_counts = y_train_ground_truth_df.sum(axis=0)
+        print(f'The ground truth totals for each column: {y_train_ground_truth_counts}')
+        # print(f'X_test_cnn (data) for subjects 1-10: {X_test_cnn[:10]}\n')
+        # print(f'Ground truth for subjects 1-10: {y_test[:10]}\n')
+        # # print(f'Shape of X_test_cnn: {X_test_cnn.shape}') 
+        # print(f'Probabilities for first NN prediction (subject 1): {nn_y_pred[0]}') # Corresponds to probabilities for first prediction
 
         ensemble_y_pred = (cnn_y_pred + nn_y_pred) / 2
-        print(f'Shape of ensemble preds: {ensemble_y_pred.shape}')
-        print(f'Probabilities for first NN prediction: {ensemble_y_pred[0]}')
+        # print(f'Shape of ensemble preds: {ensemble_y_pred.shape}')
+        # print(f'Probabilities for first NN prediction: {ensemble_y_pred[0]}')
 
         cnn_new_y_pred = []
         simple_nn_new_y_pred = []
         ensemble_new_y_pred = []
+
         for cnn_subject_prob, simple_nn_subject_prob, ensemble_subject_prob in zip(cnn_y_pred, nn_y_pred, ensemble_y_pred):
             # Convert each probability to 1 if it's >= 0.5, otherwise 0
             cnn_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in cnn_subject_prob]
+
             cnn_new_y_pred.append(cnn_binary_subject_pred)
 
             simple_nn_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in simple_nn_subject_prob]
@@ -197,22 +220,53 @@ def k_fold_cross_validation(features, labels, num_epochs):
             ensemble_binary_subject_pred = [1 if subject_probability >= 0.5 else 0 for subject_probability in ensemble_subject_prob]
             ensemble_new_y_pred.append(ensemble_binary_subject_pred)
 
-        print(y_test)
-        print(cnn_y_pred)
-        cnn_AUC = roc_auc_score(y_test, cnn_y_pred, average='macro', multi_class='ovr')
-        print(f"CNN Test AUC: {cnn_AUC}")
+        predicted_probabilities = np.array(cnn_y_pred)
 
-        simple_nn_AUC = roc_auc_score(y_test, nn_y_pred, average='macro', multi_class='ovr')
-        print(f"Simple NN Test AUC: {simple_nn_AUC}")
+        # Create a one-hot encoded array
+        one_hot_predictions = np.zeros_like(predicted_probabilities)
 
-        ensemble_AUC = roc_auc_score(y_test, ensemble_y_pred, average='macro', multi_class='ovr')
-        print(f"Ensemble Test AUC: {ensemble_AUC}")
+        # For each sample, find the index of the max probability and set it to 1
+        for i, prob in enumerate(predicted_probabilities):
+            max_class = np.argmax(prob)  # Find index of the max probability
+            one_hot_predictions[i, max_class] = 1  # Set that index to 1
+
+        # Print the one-hot encoded predictions
+        print("One-hot Encoded Predictions:")
+        print(one_hot_predictions)
+
+        y_train_pred_df = pd.DataFrame(cnn_new_y_pred)
+        y_pred_counts = y_train_pred_df.sum(axis=0)
+        print(f'The prediction for training totals for each column: {y_pred_counts}')
+
+        # cnn_AUC = roc_auc_score(y_test, cnn_y_pred, average='macro', multi_class='ovo')
+        # print(f"CNN Test AUC: {cnn_AUC}")
+
+        # simple_nn_AUC = roc_auc_score(y_test, nn_y_pred, average='macro', multi_class='ovo')
+        # print(f"Simple NN Test AUC: {simple_nn_AUC}")
+
+        # ensemble_AUC = roc_auc_score(y_test, ensemble_y_pred, average='macro', multi_class='ovo')
+        # print(f"Ensemble Test AUC: {ensemble_AUC}")
+
+        cnn_auc_metric = tf.keras.metrics.AUC()
+        cnn_auc_metric.update_state(y_test, cnn_y_pred)
+        cnn_auc_score = cnn_auc_metric.result().numpy()
+        print(f"CNN Test AUC: {cnn_auc_score}")
+
+        simple_nn_auc_metric = tf.keras.metrics.AUC()
+        simple_nn_auc_metric.update_state(y_test, nn_y_pred)
+        simple_nn_auc_score = simple_nn_auc_metric.result().numpy()
+        print(f"Simple NN Test AUC: {simple_nn_auc_score}")
+
+        ensemble_auc_metric = tf.keras.metrics.AUC()
+        ensemble_auc_metric.update_state(y_test, ensemble_y_pred)
+        ensemble_auc_score = ensemble_auc_metric.result().numpy()
+        print("ensemble_auc_score:", ensemble_auc_score)
 
         test_index_arr = None
     
-        cnn_AUC_scores.append(cnn_AUC)
-        simple_nn_AUC_scores.append(simple_nn_AUC)
-        ensemble_AUC_scores.append(ensemble_AUC)
+        cnn_AUC_scores.append(cnn_auc_score)
+        simple_nn_AUC_scores.append(simple_nn_auc_score)
+        ensemble_AUC_scores.append(ensemble_auc_score)
 
     cnn_AUC = np.mean(cnn_AUC_scores)
     simple_nn_AUC = np.mean(simple_nn_AUC_scores)
