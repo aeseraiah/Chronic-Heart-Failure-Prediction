@@ -15,6 +15,10 @@ def cleaning(df):
     # Drop 'Exit of the study' column since 'Cause of death' is the target variable:
     df = df.drop('Exit of the study', axis=1)
 
+    # Following columns are not direct risk indicators that can be measured before follow-up period:
+    df = df.drop('Follow-up period from enrollment (days)', axis=1)
+    df = df.drop('days_4years', axis=1)
+
     # Convert 'Holster Onset' column to seconds since it's original format is in 'HH:MM:SS':
     val_arr = []
     for val in df['Holter onset (hh:mm:ss)']:
@@ -139,6 +143,8 @@ def columns_to_one_hot(df):
 
 
 def standard_scalar(continuous_features_df, categorical_columns_df):
+
+    continuous_features_df = continuous_features_df.drop('Cause of death', axis=1)
     scaler = StandardScaler()
     df_scaled_continuous = scaler.fit_transform(continuous_features_df)
 
@@ -183,7 +189,9 @@ def impute_missing_values(continuous_features_df, categorical_columns_df):
 
 
 def load_labels(file_path):
-    data = pd.read_csv(file_path+'subject-info.csv', sep=';')
+    data = pd.read_csv(file_path)
+
+    print(data.columns.tolist())
 
     label_column = 'Cause of death'
     labels = data[label_column]
