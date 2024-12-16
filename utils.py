@@ -3,13 +3,12 @@ from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
 from lime import lime_tabular
-import tensorflow as tf
 import pandas as pd
-import numpy as np
-
-
+from collections import Counter
 
 def feature_importance(X_train, X_test, feature_names, label_name, model):
+    X_train = pd.DataFrame(X_train, columns=feature_names)
+    X_test = pd.DataFrame(X_test, columns=feature_names)
     
     # Create a LIME explainer
     explainer = lime_tabular.LimeTabularExplainer(
@@ -19,24 +18,22 @@ def feature_importance(X_train, X_test, feature_names, label_name, model):
         mode='classification'
     )
 
-    # Explain a prediction
-    i = 0  # Index of the instance to explain
-    exp = explainer.explain_instance(X_test.values[i], model.predict_proba)
+    i = 0 
+    exp = explainer.explain_instance(X_test.values[i], lambda x: model.predict(x))
 
-    # Visualize the explanation
-    exp.show_in_notebook(show_table=True)
+    feature_importance_list = exp.as_list()
 
-    # Print the explanation as a list of feature contributions
-    for feature, importance in exp.as_list():
-        print(f"{feature}: {importance}")
+    print(len([feature for feature, _ in feature_importance_list]))
 
-    return feature, importance
+    return [feature for feature, _ in feature_importance_list]
 
 
 def pca(X, num_components, plot_bool):
 
     pca = PCA(n_components=num_components)
     X_pca = pca.fit_transform(X)
+
+    feature_names = X.columns.tolist()
 
     if plot_bool == True:
         plt.figure(figsize=(8, 6))
@@ -45,6 +42,13 @@ def pca(X, num_components, plot_bool):
         plt.ylabel('Second Principal Component')
         plt.title('PCA Result (2D Projection)')
         plt.show()
+
+
+    pcs = pca.components_  # Principal components (loadings)
+    for i in range(pca.n_components_):
+        print(f"\nPrincipal Component {i+1}:")
+        for feature, loading in zip(feature_names, pcs[i]):
+            print(f"  {feature}: {loading:.2f}")
 
     return pca.explained_variance_ratio_, pca.explained_variance_, pca.components_, X_pca
 
