@@ -30,36 +30,39 @@ def main(file_path):
     scaled_df = preprocess_data.standard_scalar(continuous_features_imputed_df, categorical_features_imputed_df)
     preprocessed_df = scaled_df
     
-    preprocessed_df.to_csv('preprocessed_data.csv', index=False)
-    features = preprocessed_df
+    class_distribution = one_hot_labels.sum(axis=0)
+    print(f'Class distribution: {class_distribution}')
 
-    num_epochs = 100
-    num_splits = 20
-    patience = 3
+    # preprocessed_df.to_csv('preprocessed_data.csv', index=False)
+    # features = preprocessed_df
 
-    features = pd.DataFrame(features)
+    # num_epochs = 100
+    # num_splits = 20
+    # patience = 3
 
-    average_test_AUC, history, sorted_feature_counts = train_model.train_k_fold(features, one_hot_labels, patience=patience, num_splits=num_splits, num_epochs=num_epochs, perform_shap='False')
-    print(f"Average Test AUC: {average_test_AUC}")
+    # features = pd.DataFrame(features)
 
-    num_top_features = 10
-    top_features_count = sorted_feature_counts[:num_top_features]
+    # average_test_AUC, history, sorted_feature_counts = train_model.train_k_fold(features, one_hot_labels, patience=patience, num_splits=num_splits, num_epochs=num_epochs, perform_shap='False')
+    # print(f"Average Test AUC: {average_test_AUC}")
 
-    features_list = []
-    for feature, count in top_features_count:
-        features_list.append(feature)
-        print(f"{feature}: {count}")
+    # num_top_features = 10
+    # top_features_count = sorted_feature_counts[:num_top_features]
 
-    top_features_cleaned = [re.sub(r'\s*<=\s*[-+]?\d*\.?\d+', '', feature) for feature in features_list]
-    print(top_features_cleaned)
+    # features_list = []
+    # for feature, count in top_features_count:
+    #     features_list.append(feature)
+    #     print(f"{feature}: {count}")
 
-    top_features = features[top_features_cleaned]
+    # top_features_cleaned = [re.sub(r'\s*<=\s*[-+]?\d*\.?\d+', '', feature) for feature in features_list]
+    # print(top_features_cleaned)
 
-    num_splits = 5
-    average_test_AUC, history, sorted_feature_counts = train_model.train_k_fold(top_features, one_hot_labels, patience=patience, num_splits=num_splits, num_epochs=num_epochs, perform_shap='False')
-    print(f"Average Test AUC: {average_test_AUC}")
+    # top_features = features[top_features_cleaned]
 
-    utils.plot_metrics(model_history=history, metrics_plot_name=f'metrics', model_name='deep_neural_net')
+    # num_splits = 5
+    # average_test_AUC, history, sorted_feature_counts = train_model.train_k_fold(top_features, one_hot_labels, patience=patience, num_splits=num_splits, num_epochs=num_epochs, perform_shap='False')
+    # print(f"Average Test AUC: {average_test_AUC}")
+
+    # utils.plot_metrics(model_history=history, metrics_plot_name=f'metrics', model_name='deep_neural_net')
 
 if __name__ == '__main__':
     main(file_path='./data/')
